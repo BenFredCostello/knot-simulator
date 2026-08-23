@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Brunnian Link Lab</title>
+<link rel="stylesheet" href="styles.css" />
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<div id="app">
+
+  <aside id="sidebar">
+    <header class="brand">
+      <h1>Brunnian Link Lab</h1>
+      <p class="sub">Algebraic words &rarr; linked rings</p>
+    </header>
+
+    <section class="panel">
+      <h2>Rings</h2>
+      <div class="row">
+        <button id="addRing" class="btn primary">+ Add Ring</button>
+        <button id="removeRing" class="btn ghost">Remove</button>
+      </div>
+      <ul id="ringList" class="ring-list"></ul>
+      <p class="hint">Rings <b>1&hellip;n&minus;1</b> are the unknotted base rings. The
+      <b>highest-numbered</b> ring is the <em>word ring</em> &mdash; its path is built from the word below.</p>
+    </section>
+
+    <section class="panel">
+      <h2>Algebraic word</h2>
+      <div class="word-input-wrap">
+        <input id="wordInput" type="text" spellcheck="false" autocomplete="off"
+               placeholder="aba'b'" value="aba'b'" />
+      </div>
+      <div class="row wrap">
+        <button id="invBtn" class="btn ghost mono" title="Append an inverse mark to the last letter">x&#8315;&#185;</button>
+        <button id="clearWord" class="btn ghost">Clear</button>
+        <button id="borromean" class="btn ghost">Borromean</button>
+        <button id="whitehead" class="btn ghost">4-ring</button>
+      </div>
+      <div id="wordPretty" class="word-pretty"></div>
+      <div id="wordMsg" class="msg"></div>
+      <p class="hint">Type <code>a</code>&hellip;<code>z</code> or ring numbers <code>1 2 3</code>.
+      An apostrophe <code>'</code> inverts the letter before it (<code>a'</code> = a&#8315;&#185;).
+      <code>^-1</code> works too. Geometry rebuilds on every keystroke.</p>
+    </section>
+
+    <section class="panel">
+      <h2>Verification</h2>
+      <button id="verifyBtn" class="btn primary wide">Verify Brunnian</button>
+      <div id="verifyOut" class="verify-out"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Simulation</h2>
+      <div class="row wrap">
+        <button id="pullBtn" class="btn accent">Pull</button>
+        <button id="cutBtn" class="btn ghost">Cut tool</button>
+        <button id="resetBtn" class="btn ghost">Reset</button>
+      </div>
+      <label class="slider">
+        <span>Tension <b id="tensionVal">1.0&times;</b></span>
+        <input id="tension" type="range" min="0.2" max="3" step="0.1" value="1" />
+      </label>
+      <label class="check">
+        <input id="autoSettle" type="checkbox" checked />
+        <span>Auto-settle after rebuild</span>
+      </label>
+      <p class="hint">Hold <kbd>Space</kbd> to pull. With the cut tool armed, click any ring to snip it;
+      click a snipped ring again to rejoin.</p>
+    </section>
+
+    <section class="panel">
+      <h2>View</h2>
+      <div class="row wrap">
+        <button class="btn ghost view" data-view="three">&frac34;</button>
+        <button class="btn ghost view" data-view="top">Top</button>
+        <button class="btn ghost view" data-view="front">Front</button>
+        <button id="fitBtn" class="btn ghost">Fit</button>
+      </div>
+    </section>
+
+    <footer class="foot">
+      <span id="stats">&mdash;</span>
+    </footer>
+  </aside>
+
+  <main id="stage">
+    <canvas id="canvas"></canvas>
+    <div id="hud" class="hud"></div>
+    <div id="toast" class="toast"></div>
+  </main>
+
+</div>
+<script type="module" src="src/main.js"></script>
+</body>
+</html>
