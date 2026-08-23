@@ -429,6 +429,12 @@ export class Sim {
   setPegs(pegs, clearance) {
     this.pegs = pegs.map((p) => ({ x: p.x, z: p.z, ylo: p.ylo, yhi: p.yhi }));
     this.pegClearance = clearance;
+    // Once a link comes free nothing resists the pegs any more, so without a
+    // ceiling they accelerate off-screen. Stopping at a few times the starting
+    // radius is well past the point where it is obvious what happened.
+    let r0 = 0;
+    for (const p of this.pegs) r0 = Math.max(r0, Math.hypot(p.x, p.z));
+    this.pegLimit = Math.max(1, r0) * 3.2;
   }
 
   /** Confine every point to the horizontal slab ylo..yhi. Null disables. */
@@ -445,6 +451,9 @@ export class Sim {
   advancePegs(rate) {
     if (!this.pegs || !this.pegs.length) return 0;
     const cap = this.params.maxPegStep;
+    let far = 0;
+    for (const p of this.pegs) far = Math.max(far, Math.hypot(p.x, p.z));
+    if (far >= this.pegLimit) return 0;
     let moved = 0;
     for (const p of this.pegs) {
       let dx = p.x * rate;

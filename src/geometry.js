@@ -292,11 +292,31 @@ export function buildWordRingRadial(letters, m) {
   const off = crossingOffsets(valid, true);
   const ang = valid.map((l) => ringAngle(l.gen, m));
 
+  // Choose which way round to travel between letters so the net angular travel
+  // stays near zero.
+  //
+  // This matters far more than it looks. A peg runs from the floor to the
+  // ceiling, so it is an infinite barrier: if the word ring's path winds around
+  // one, it is threaded onto that peg permanently and no cut can ever free it.
+  // Always taking the short way round accumulates a full turn about the whole
+  // flower, which trapped the word ring on every peg — Borromean rings could be
+  // snipped and would still refuse to come apart. Picking the direction that
+  // keeps the running total near zero, and closing with exactly the opposite
+  // total, leaves winding zero about every peg.
+  const use = new Array(valid.length);
+  use[0] = ang[0];
+  for (let j = 1; j < valid.length; j++) {
+    const d0 = wrapPi(ang[j] - use[j - 1]);
+    const alt = d0 > 0 ? d0 - 2 * Math.PI : d0 + 2 * Math.PI;
+    const cum = use[j - 1] - ang[0];
+    use[j] = use[j - 1] + (Math.abs(cum + d0) <= Math.abs(cum + alt) ? d0 : alt);
+  }
+
   const corners = [];
   const P = (r, a, o, y) => corners.push(polar(r, a, o, y));
 
   for (let j = 0; j < valid.length; j++) {
-    const a = ang[j];
+    const a = use[j];
     const o = off[j];
     const rIn = RL0 + j * LANE_STEP;
     const rOut = RL0 + (j + 1) * LANE_STEP;
@@ -316,7 +336,7 @@ export function buildWordRingRadial(letters, m) {
     P(rOut, a, o, 0);       // dock on the next lane
 
     if (j < valid.length - 1) {
-      const d = wrapPi(ang[j + 1] - a);
+      const d = use[j + 1] - a;
       const steps = Math.max(1, Math.round(Math.abs(d) / 0.22));
       for (let s = 1; s < steps; s++) {
         const f = s / steps;
@@ -329,14 +349,16 @@ export function buildWordRingRadial(letters, m) {
   // in just short of the first dock so the descent never shares a line with it.
   const last = valid.length - 1;
   const rLast = RL0 + valid.length * LANE_STEP;
+  // Land just short of the first dock, and unwind exactly the angle the letters
+  // travelled, so the closed loop encircles no peg.
   const aLand = ang[0] - 0.22;
-  const aLift = ang[last] + 0.22;
+  const aLift = use[last] + 0.22;
   // Step off the final dock before lifting, otherwise the rise shares a line
   // with the descent that just landed there and the curve pinches to nothing.
-  P(rLast, ang[last] + 0.11, off[last] * 0.5, 0);
+  P(rLast, use[last] + 0.11, off[last] * 0.5, 0);
   P(rLast, aLift, 0, 0);
   P(rLast, aLift, 0, HRET);
-  const d = wrapPi(aLand - aLift);
+  const d = aLand - aLift;
   const steps = Math.max(4, Math.round(Math.abs(d) / 0.22) + 3);
   for (let s = 1; s <= steps; s++) {
     const f = s / steps;

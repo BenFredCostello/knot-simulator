@@ -131,12 +131,24 @@ typed word. Because Borromean rings have all-zero linking numbers, that case was
 separately — intact, the three stay locked together under outward pressure; snip one and all
 three separate.
 
-One honest limitation. In **Free** mode a snip separates everything decisively (component
-centres go from ~0.3 apart to 5.6–9.8). In **Peg** mode the snipped ring pulls clear and the
-whole assembly visibly loosens — extent roughly triples — but the remaining rings stay near
-their pegs, because that is exactly what the pegs are for. A tight tangle does not spontaneously
-undo; the solver will not always find the large coordinated motion needed to slide a freed word
-ring off. If you want the full fall-apart for a lecture, do that part in Free mode.
+In peg mode a snip separates the freed ring decisively — Borromean goes from component centres
+0.6–2.0 apart to 8.8, and the four-ring link doubles its extent with the cut ring 5.5–7.5 clear.
+The remaining rings stay near their pegs, because that is exactly what pegs are for; if you want
+everything to drift completely free, do that part in Free mode.
+
+### Why a peg is not just an obstacle
+
+Getting this wrong cost a release. A peg runs from the floor to the ceiling, so it is an
+**infinite barrier**: if the word ring's path winds around one, it is threaded onto that peg
+permanently and *no cut can ever free it*. The first version routed the word ring on lanes that
+looped around the outside of the whole flower, which accumulated a full turn and gave winding 1
+about every peg — so Borromean rings could be snipped and would still sit there taut, refusing
+to come apart.
+
+The winding number about each peg is not the same thing as the exponent sum, and it has to be
+zero independently. Borromean is the clearest case: exponent sums are 0 (it is a commutator)
+while the winding was 1. The fix is to choose which way round to travel between letters so the
+running total stays near zero, then close the loop with exactly the opposite total.
 
 ## Running locally
 
