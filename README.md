@@ -78,6 +78,12 @@ can travel a long way from where they started.
 The intended demo: type `aba'b'`, hit **Pull** and watch three rings lock into a tight knot.
 Then arm the **cut tool**, snip any one of them, and pull again.
 
+Equalise stops when a strand is genuinely taut. The word ring often cannot reach the common
+length — it has to weave through everything, and there is a shortest length at which it can
+still do so — and chasing a target it can never hit would leave it permanently over-tensioned.
+On a loose layout it still equalises fully (word ring 107 → 6.3, matching the hoops); on an
+already-tight knot it gives up after about thirty frames.
+
 Equalise targets the **median** length, not the mean. The word ring can start out an order of
 magnitude longer than the hoops (a raw comb for four rings runs to ~258 units against their
 6.3), and a mean dominated by that outlier inflates every hoop to match instead of reeling the

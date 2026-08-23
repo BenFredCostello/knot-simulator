@@ -608,6 +608,7 @@ export class Sim {
       s.targetLen = Math.min(max, Math.max(target, min));
       s.taut = false;
       s.stall = 0;
+      s.eqStall = 0;
       s.lastLen = undefined;
     }
     this.equalising = true;
@@ -621,7 +622,25 @@ export class Sim {
       for (let k = 0; k < s.rest.length; k++) sum += s.rest[k];
       if (sum < 1e-6) continue;
       const ratio = s.targetLen / sum;
-      if (Math.abs(ratio - 1) < 0.003) continue;
+      if (Math.abs(ratio - 1) < 0.003) {
+        s.targetLen = null;
+        continue;
+      }
+      // The word ring often cannot reach the median: it has to weave through
+      // everything, and there is a shortest length at which it can still do so.
+      // Once it is genuinely taut, stop aiming at a target it can never hit —
+      // otherwise rest length keeps falling away from a real length that cannot
+      // follow, and the strand ends up permanently over-tensioned.
+      if (ratio < 1 && this._length(s) / sum > this.params.shrinkStrainLimit) {
+        s.eqStall = (s.eqStall || 0) + 1;
+        if (s.eqStall > 30) {
+          s.targetLen = null;
+          continue;
+        }
+        done = false;
+        continue;
+      }
+      s.eqStall = 0;
       done = false;
       // Bounded rate, so equalising is something you watch rather than a jump.
       const step = ratio > 1 ? Math.min(ratio, 1.006) : Math.max(ratio, 0.994);
