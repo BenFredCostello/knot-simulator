@@ -61,13 +61,21 @@
 
     <section class="panel">
       <h2>Simulation</h2>
+      <div class="row wrap seg">
+        <button class="btn ghost mode on" data-mode="pegs">Pegs</button>
+        <button class="btn ghost mode" data-mode="free">Free</button>
+      </div>
+      <p id="modeHint" class="hint"></p>
       <div class="row wrap">
         <button id="pullBtn" class="btn accent">Pull</button>
+        <button id="equaliseBtn" class="btn ghost">Equalise</button>
         <button id="cutBtn" class="btn ghost">Cut tool</button>
         <button id="resetBtn" class="btn ghost">Reset</button>
       </div>
+      <p class="hint">Equalise drives every ring toward the same length, so the knot comes out
+      even instead of one long rope threaded through small hoops.</p>
       <label class="slider">
-        <span>Tension <b id="tensionVal">1.0&times;</b></span>
+        <span><b id="tensionLabel">Spread speed</b> <b id="tensionVal">1.0&times;</b></span>
         <input id="tension" type="range" min="0.2" max="3" step="0.1" value="1" />
       </label>
       <label class="check">
@@ -75,7 +83,7 @@
         <span>Auto-settle after rebuild</span>
       </label>
       <p class="hint">Hold <kbd>Space</kbd> to pull. With the cut tool armed, click any ring to snip it;
-      click a snipped ring again to rejoin.</p>
+      click a snipped ring again to rejoin. Snip a ring in peg mode and it slips off its peg.</p>
     </section>
 
     <section class="panel">

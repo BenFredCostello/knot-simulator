@@ -23,7 +23,12 @@ const DEFAULTS = {
   shrink: 0.9965, // rest-length multiplier per frame while pulling
   spread: 0.004, // how hard separate rings are drawn apart while pulling
   spreadRange: 5.5, // beyond this centre distance rings stop pushing apart
+  pegRate: 0.0022, // fractional outward dilation of the pegs per frame
+  maxPegStep: 0.015, // cap per frame, so a peg can never sweep through a strand
+  strainLimit: 1.12, // peg speed eases to zero as the hoops reach this stretch
+  shrinkStrainLimit: 1.03, // never shrink rest length far below reachable length
   minPoints: 20,
+  maxPoints: 620,
 };
 
 function hashCell(x, y, z) {
@@ -31,6 +36,46 @@ function hashCell(x, y, z) {
 }
 
 const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
+
+/**
+ * Closest approach parameters between segments P->P+D1 and Q->Q+D2.
+ * Writes [s, t] into `out`. Standard clamped-parameter solution.
+ */
+function segClosest(px, py, pz, d1x, d1y, d1z, qx, qy, qz, d2x, d2y, d2z, out) {
+  const rx = px - qx;
+  const ry = py - qy;
+  const rz = pz - qz;
+  const A = d1x * d1x + d1y * d1y + d1z * d1z;
+  const E = d2x * d2x + d2y * d2y + d2z * d2z;
+  const F = d2x * rx + d2y * ry + d2z * rz;
+  const EPS = 1e-12;
+  let s = 0;
+  let t = 0;
+  if (A <= EPS && E <= EPS) {
+    // both degenerate
+  } else if (A <= EPS) {
+    t = clamp01(F / E);
+  } else {
+    const C = d1x * rx + d1y * ry + d1z * rz;
+    if (E <= EPS) {
+      s = clamp01(-C / A);
+    } else {
+      const B = d1x * d2x + d1y * d2y + d1z * d2z;
+      const denom = A * E - B * B;
+      s = denom > EPS ? clamp01((B * F - C * E) / denom) : 0;
+      t = (B * s + F) / E;
+      if (t < 0) {
+        t = 0;
+        s = clamp01(-C / A);
+      } else if (t > 1) {
+        t = 1;
+        s = clamp01((B - C) / A);
+      }
+    }
+  }
+  out[0] = s;
+  out[1] = t;
+}
 
 /** Resample a polyline to `n` points spaced evenly by arc length. */
 export function resamplePolyline(flat, n, closed) {
@@ -87,13 +132,27 @@ export class Sim {
     this.lid = new Int32Array(0);
     this.tableSize = 0;
     this.topologyVersion = 0;
+    this.pegs = [];
+    this.pegClearance = 0.26;
+    this.slabLo = null;
+    this.slabHi = null;
+    this.shrinkable = null;
+    this.pegsMoving = false;
   }
 
-  /** Replace all strands. `list` is [{ points: Vector3[] | Float32Array, closed }]. */
+  /**
+   * Replace all strands.
+   * `list` is [{ points: Vector3[] | Float32Array, closed, shrink }].
+   * `shrink: false` pins a strand's rest lengths so Pull cannot contract it.
+   */
   setStrands(list) {
     const flats = list.map((s) =>
       s.points instanceof Float32Array ? s.points : flatten(s.points)
     );
+    this.shrinkable = list.map((s) => s.shrink !== false);
+    this.minLen = list.map((s) => s.minLen || 0);
+    this.maxLen = list.map((s) => s.maxLen || 0);
+    this.equalising = false;
     this._pack(flats, list.map((s) => s.closed !== false));
   }
 
@@ -127,11 +186,34 @@ export class Sim {
         taut: carried ? carried.taut : false,
         stall: carried ? carried.stall : 0,
         lastLen: carried ? carried.lastLen : undefined,
+        targetLen: carried ? carried.targetLen : null,
       };
       this.strands.push(strand);
       strand.rest = this._measure(strand);
+      // Rest lengths are re-measured from current positions, so a strand that
+      // happens to be stretched when it gets resampled would adopt the stretched
+      // length as its new rest and ratchet upward forever. Renormalising to the
+      // carried total keeps the intended rest length intact.
+      if (carried && carried.restTotal > 0 && strand.rest.length) {
+        let sum = 0;
+        for (let k = 0; k < strand.rest.length; k++) sum += strand.rest[k];
+        if (sum > 1e-9) {
+          const k = carried.restTotal / sum;
+          for (let q = 0; q < strand.rest.length; q++) strand.rest[q] *= k;
+        }
+      }
       off += n;
     }
+    // Successor of each point. This depends only on topology, so it is built
+    // once here rather than being rediscovered on every solver iteration.
+    this.nextIdx = new Int32Array(total);
+    for (const s of this.strands) {
+      for (let i = 0; i < s.n; i++) {
+        const g = s.offset + i;
+        this.nextIdx[g] = i === s.n - 1 ? (s.closed ? s.offset : -1) : g + 1;
+      }
+    }
+
     this.prev.set(this.pos);
     this.topologyVersion++;
   }
@@ -173,9 +255,40 @@ export class Sim {
 
   step(pull, tension = 1) {
     if (this.count === 0) return;
+    const pegged = !!(this.pegs && this.pegs.length);
+    this.pegsMoving = false;
+    if (this.equalising) this._equaliseStep();
     if (pull) {
       this._shrink(tension);
-      this._computeSpread(tension);
+      // Pegs replace the centroid drift entirely: when rings are threaded on
+      // pegs, separation comes from the pegs actually moving apart, which is a
+      // real mechanism rather than a force invented per component.
+      if (pegged) {
+        // Two phases, in order. First the word ring contracts until it has
+        // taken up the slack in the raw threading, which is what turns the comb
+        // into a knot. Only then do the pegs start dragging, and they stop as
+        // soon as the hoops they are dragging begin to stretch.
+        // Soft limiter rather than a hard stop. A hard cut-off deadlocks: the
+        // system parks exactly at the threshold and never moves again, even
+        // once a snip has freed the link. Easing the speed to zero as the
+        // hoops approach their stretch limit lets a locked link stall while a
+        // freed one keeps sliding apart.
+        const limit = this.params.strainLimit;
+        const head = clamp01((limit - this.strain(true)) / (limit - 1));
+        const tight = this._slackTakenUp();
+        if (tight && head > 0.02) {
+          this.pegsMoving = this.advancePegs(this.params.pegRate * tension * head) > 1e-9;
+        }
+        // Pegs only push where they touch, which is not enough to work a freed
+        // component loose from a jammed tangle. A gentle whole-component drift
+        // supplies that; rings held on pegs cannot run away, so it stays tidy.
+        // It waits for the slack to be gone, because applied to a loose comb it
+        // would simply stretch the slack out instead of testing anything.
+        if (tight) this._computeSpread(tension * 0.5);
+        else this.spreadVec = null;
+      } else {
+        this._computeSpread(tension);
+      }
     } else {
       this.spreadVec = null;
     }
@@ -184,7 +297,7 @@ export class Sim {
     // on where every point ends up this frame.
     this._smooth();
     for (let i = 0; i < this.params.substeps; i++) this._substep();
-    if (pull) this._maybeResample();
+    if (pull || this.equalising) this._maybeResample();
   }
 
   /**
@@ -270,7 +383,11 @@ export class Sim {
   _shrink(tension) {
     const rate = Math.pow(this.params.shrink, Math.max(0.05, tension));
     const { repel } = this.params;
-    for (const s of this.strands) {
+    for (let si = 0; si < this.strands.length; si++) {
+      const s = this.strands[si];
+      // A ring held open on a peg must keep a hole big enough for whatever is
+      // threaded through it, so in peg mode only the word ring contracts.
+      if (this.shrinkable && this.shrinkable[si] === false) continue;
       const len = this._length(s);
       if (s.lastLen !== undefined) {
         const drop = (s.lastLen - len) / Math.max(len, 1e-6);
@@ -280,6 +397,14 @@ export class Sim {
       s.lastLen = len;
       if (s.taut) continue;
 
+      let restSum = 0;
+      for (let k = 0; k < s.rest.length; k++) restSum += s.rest[k];
+      // Never pull the rest length far below what the strand can actually
+      // reach. Otherwise rest keeps falling while the real length cannot
+      // follow, and the strand ends up permanently over-tensioned — which is
+      // exactly the state that squeezes strands through each other.
+      if (restSum > 1e-6 && len / restSum > this.params.shrinkStrainLimit) continue;
+
       const floor = s.closed ? Math.PI * repel * 1.08 : repel * 1.5;
       let sum = 0;
       for (let k = 0; k < s.rest.length; k++) sum += s.rest[k];
@@ -288,6 +413,214 @@ export class Sim {
         continue;
       }
       for (let k = 0; k < s.rest.length; k++) s.rest[k] *= rate;
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Pegs and bounds (rod mode)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Install vertical pegs. Each is a capsule from (x, ylo, z) to (x, yhi, z)
+   * that no strand may pass through, so a ring threaded onto one is genuinely
+   * captured: it cannot escape without being cut. Passing an empty list, or
+   * clearing the bounds, returns the sim to free mode.
+   */
+  setPegs(pegs, clearance) {
+    this.pegs = pegs.map((p) => ({ x: p.x, z: p.z, ylo: p.ylo, yhi: p.yhi }));
+    this.pegClearance = clearance;
+  }
+
+  /** Confine every point to the horizontal slab ylo..yhi. Null disables. */
+  setSlab(ylo, yhi) {
+    this.slabLo = ylo;
+    this.slabHi = yhi;
+  }
+
+  /**
+   * Dilate the pegs outward from the origin. Velocity is proportional to
+   * distance, so a peg sitting at the origin does not move at all and the
+   * spacing between every pair grows in proportion.
+   */
+  advancePegs(rate) {
+    if (!this.pegs || !this.pegs.length) return 0;
+    const cap = this.params.maxPegStep;
+    let moved = 0;
+    for (const p of this.pegs) {
+      let dx = p.x * rate;
+      let dz = p.z * rate;
+      const m = Math.hypot(dx, dz);
+      if (m > cap) {
+        const k = cap / m;
+        dx *= k;
+        dz *= k;
+      }
+      p.x += dx;
+      p.z += dz;
+      moved += Math.abs(dx) + Math.abs(dz);
+    }
+    return moved;
+  }
+
+  /**
+   * Worst ratio of actual length to rest length across all strands. Above 1
+   * something is being stretched, which is the signal that the link has gone
+   * taut and the pegs should stop pulling.
+   */
+  /** True once every contracting strand has stopped getting shorter. */
+  _slackTakenUp() {
+    for (let i = 0; i < this.strands.length; i++) {
+      if (this.shrinkable && this.shrinkable[i] === false) continue;
+      if (!this.strands[i].taut) return false;
+    }
+    return true;
+  }
+
+  strain(pinnedOnly = false) {
+    let worst = 0;
+    let seen = false;
+    for (let i = 0; i < this.strands.length; i++) {
+      // A strand that is deliberately contracting always reads as strained, so
+      // gating the pegs on it would stop them instantly. The rings the pegs
+      // actually drag are the pinned ones; their stretch is the real signal.
+      if (pinnedOnly && this.shrinkable && this.shrinkable[i] !== false) continue;
+      const s = this.strands[i];
+      let rest = 0;
+      for (let k = 0; k < s.rest.length; k++) rest += s.rest[k];
+      if (rest < 1e-6) continue;
+      seen = true;
+      const r = this._length(s) / rest;
+      if (r > worst) worst = r;
+    }
+    if (pinnedOnly && !seen) return this.strain(false);
+    return worst;
+  }
+
+  _solvePegs() {
+    if (!this.pegs || !this.pegs.length) return;
+    const clearance = this.pegClearance;
+    const nextIdx = this.nextIdx;
+    for (let i = 0; i < this.count; i++) {
+      const i2 = nextIdx[i];
+      if (i2 < 0) continue;
+      for (let p = 0; p < this.pegs.length; p++) {
+        this._separateFromPeg(i, i2, this.pegs[p], clearance);
+      }
+    }
+  }
+
+  /** Push one strand segment clear of a peg. The peg never moves. */
+  _separateFromPeg(a1, a2, peg, clearance) {
+    const pos = this.pos;
+    const oa = a1 * 3;
+    const oa2 = a2 * 3;
+    // Cheap horizontal reject: a peg is a vertical line, so anything far from
+    // it in plan view cannot touch it whatever its height.
+    const hx = pos[oa] - peg.x;
+    const hz = pos[oa + 2] - peg.z;
+    const reach = clearance + (this.maxSeg || this.params.segTarget);
+    if (hx * hx + hz * hz > reach * reach) return;
+    const d1x = pos[oa2] - pos[oa];
+    const d1y = pos[oa2 + 1] - pos[oa + 1];
+    const d1z = pos[oa2 + 2] - pos[oa + 2];
+
+    const st = this._st || (this._st = new Float64Array(2));
+    segClosest(pos[oa], pos[oa + 1], pos[oa + 2], d1x, d1y, d1z,
+      peg.x, peg.ylo, peg.z, 0, peg.yhi - peg.ylo, 0, st);
+    const s = st[0];
+    const t = st[1];
+
+    const px = peg.x;
+    const py = peg.ylo + (peg.yhi - peg.ylo) * t;
+    const pz = peg.z;
+    let vx = pos[oa] + d1x * s - px;
+    let vy = pos[oa + 1] + d1y * s - py;
+    let vz = pos[oa + 2] + d1z * s - pz;
+    let dd = vx * vx + vy * vy + vz * vz;
+    if (dd >= clearance * clearance) return;
+    if (dd < 1e-14) {
+      vx = 1e-4;
+      vz = 1e-4;
+      vy = 0;
+      dd = vx * vx + vz * vz;
+    }
+    const d = Math.sqrt(dd);
+    const push = (clearance - d) / d;
+    const cx = vx * push;
+    const cy = vy * push;
+    const cz = vz * push;
+    const w = 1 / ((1 - s) * (1 - s) + s * s);
+    pos[oa] += cx * (1 - s) * w;
+    pos[oa + 1] += cy * (1 - s) * w;
+    pos[oa + 2] += cz * (1 - s) * w;
+    pos[oa2] += cx * s * w;
+    pos[oa2 + 1] += cy * s * w;
+    pos[oa2 + 2] += cz * s * w;
+  }
+
+  _solveSlab() {
+    if (this.slabLo == null) return;
+    const pos = this.pos;
+    const lo = this.slabLo;
+    const hi = this.slabHi;
+    for (let i = 0; i < this.count; i++) {
+      const o = i * 3 + 1;
+      if (pos[o] < lo) pos[o] = lo;
+      else if (pos[o] > hi) pos[o] = hi;
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Equalising
+  // -------------------------------------------------------------------------
+
+  /**
+   * Drive every strand toward a common length.
+   *
+   * Left alone, the word ring ends up far longer than the base rings because it
+   * has to weave through all of them, which reads as one rope threaded through
+   * some hoops rather than as a symmetric link. Equalising aims them all at the
+   * mean, letting the short ones grow and the long one contract, so the knot
+   * comes out even. Per-strand minimums still apply: a ring on a peg must keep
+   * a hole wide enough for whatever passes through it.
+   */
+  equalise() {
+    if (!this.strands.length) return;
+    // Median, not mean. The word ring can start out an order of magnitude
+    // longer than the hoops, and a mean dominated by that outlier would inflate
+    // every hoop to match it instead of reeling the long one in.
+    const lens = this.strands.map((_, i) => this.strandLength(i)).sort((a, b) => a - b);
+    const mid = lens.length >> 1;
+    const target = lens.length % 2 ? lens[mid] : (lens[mid - 1] + lens[mid]) / 2;
+    for (let i = 0; i < this.strands.length; i++) {
+      const s = this.strands[i];
+      const min = this.minLen ? this.minLen[i] || 0 : 0;
+      const max = this.maxLen && this.maxLen[i] ? this.maxLen[i] : Infinity;
+      s.targetLen = Math.min(max, Math.max(target, min));
+      s.taut = false;
+      s.stall = 0;
+      s.lastLen = undefined;
+    }
+    this.equalising = true;
+  }
+
+  _equaliseStep() {
+    let done = true;
+    for (const s of this.strands) {
+      if (s.targetLen == null) continue;
+      let sum = 0;
+      for (let k = 0; k < s.rest.length; k++) sum += s.rest[k];
+      if (sum < 1e-6) continue;
+      const ratio = s.targetLen / sum;
+      if (Math.abs(ratio - 1) < 0.003) continue;
+      done = false;
+      // Bounded rate, so equalising is something you watch rather than a jump.
+      const step = ratio > 1 ? Math.min(ratio, 1.006) : Math.max(ratio, 0.994);
+      for (let k = 0; k < s.rest.length; k++) s.rest[k] *= step;
+    }
+    if (done) {
+      this.equalising = false;
+      for (const s of this.strands) s.targetLen = null;
     }
   }
 
@@ -338,7 +671,10 @@ export class Sim {
     this._buildHash();
     for (let it = 0; it < iterations; it++) {
       this._solveDistance(stiffness);
+      this._solveDistance(stiffness);
       this._solveCollision();
+      this._solvePegs();
+      this._solveSlab();
     }
   }
 
@@ -383,14 +719,12 @@ export class Sim {
     if (!this.mid || this.mid.length !== n * 3) {
       this.mid = new Float32Array(n * 3);
       this.segLen = new Float32Array(n);
-      this.nextIdx = new Int32Array(n);
     }
     const { pos, mid, segLen, nextIdx } = this;
     let maxSeg = 0;
     for (let i = 0; i < n; i++) {
       const a = i * 3;
-      const j = this._next(i);
-      nextIdx[i] = j;
+      const j = nextIdx[i];
       if (j < 0) {
         mid[a] = pos[a];
         mid[a + 1] = pos[a + 1];
@@ -449,14 +783,6 @@ export class Sim {
     cellStart[T] = sum;
     cursor.set(cellStart.subarray(0, T));
     for (let i = 0; i < n; i++) entries[cursor[keys[i]]++] = i;
-  }
-
-  /** Local index following `i` on its strand, or -1 if `i` ends an open chain. */
-  _next(i) {
-    const s = this.strands[this.sid[i]];
-    const l = this.lid[i];
-    if (l === s.n - 1) return s.closed ? s.offset : -1;
-    return i + 1;
   }
 
   /**
@@ -541,39 +867,12 @@ export class Sim {
     const d2x = pos[ob2] - pos[ob];
     const d2y = pos[ob2 + 1] - pos[ob + 1];
     const d2z = pos[ob2 + 2] - pos[ob + 2];
-    const rx = pos[oa] - pos[ob];
-    const ry = pos[oa + 1] - pos[ob + 1];
-    const rz = pos[oa + 2] - pos[ob + 2];
 
-    const A = d1x * d1x + d1y * d1y + d1z * d1z;
-    const E = d2x * d2x + d2y * d2y + d2z * d2z;
-    const F = d2x * rx + d2y * ry + d2z * rz;
-    const EPS = 1e-12;
-
-    let s = 0;
-    let t = 0;
-    if (A <= EPS && E <= EPS) {
-      // both degenerate
-    } else if (A <= EPS) {
-      t = clamp01(F / E);
-    } else {
-      const C = d1x * rx + d1y * ry + d1z * rz;
-      if (E <= EPS) {
-        s = clamp01(-C / A);
-      } else {
-        const B = d1x * d2x + d1y * d2y + d1z * d2z;
-        const denom = A * E - B * B;
-        s = denom > EPS ? clamp01((B * F - C * E) / denom) : 0;
-        t = (B * s + F) / E;
-        if (t < 0) {
-          t = 0;
-          s = clamp01(-C / A);
-        } else if (t > 1) {
-          t = 1;
-          s = clamp01((B - C) / A);
-        }
-      }
-    }
+    const st = this._st || (this._st = new Float64Array(2));
+    segClosest(pos[oa], pos[oa + 1], pos[oa + 2], d1x, d1y, d1z,
+      pos[ob], pos[ob + 1], pos[ob + 2], d2x, d2y, d2z, st);
+    const s = st[0];
+    const t = st[1];
 
     let vx = pos[ob] + d2x * t - (pos[oa] + d1x * s);
     let vy = pos[ob + 1] + d2y * t - (pos[oa + 1] + d1y * s);
@@ -644,15 +943,19 @@ export class Sim {
    * ring shrink right down instead of jamming on its own points.
    */
   _maybeResample() {
-    const { segTarget, minPoints } = this.params;
+    const { segTarget, minPoints, maxPoints } = this.params;
     let needed = false;
     const plan = this.strands.map((s) => {
       const len = this._length(s);
       const segs = s.closed ? s.n : s.n - 1;
       const mean = len / Math.max(1, segs);
-      if (mean < segTarget * 0.55 && s.n > minPoints) {
-        const target = Math.max(minPoints, Math.round(len / segTarget));
-        if (target < s.n) {
+      // Too bunched, or (when a strand has been grown) too sparse. Sparse
+      // matters: segments longer than `repel` would let strands slip past.
+      const tooDense = mean < segTarget * 0.55 && s.n > minPoints;
+      const tooSparse = mean > segTarget * 1.55 && s.n < maxPoints;
+      if (tooDense || tooSparse) {
+        const target = Math.max(minPoints, Math.min(maxPoints, Math.round(len / segTarget)));
+        if (target !== s.n) {
           needed = true;
           return target;
         }
@@ -665,7 +968,11 @@ export class Sim {
       const flat = this.pos.slice(s.offset * 3, (s.offset + s.n) * 3);
       return plan[i] === s.n ? flat : resamplePolyline(flat, plan[i], s.closed);
     });
-    const carry = this.strands.map((s) => ({ taut: s.taut, stall: s.stall, lastLen: s.lastLen }));
+    const carry = this.strands.map((s) => {
+      let restTotal = 0;
+      for (let k = 0; k < s.rest.length; k++) restTotal += s.rest[k];
+      return { taut: s.taut, stall: s.stall, lastLen: s.lastLen, targetLen: s.targetLen, restTotal };
+    });
     this._pack(flats, this.strands.map((s) => s.closed), carry);
   }
 

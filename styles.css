@@ -193,3 +193,8 @@ input[type=range]::-moz-range-thumb{
 @media (max-width:900px){
   #sidebar{width:270px;flex-basis:270px}
 }
+
+/* mode segmented control */
+.seg{margin-bottom:9px}
+.seg .btn{flex:1 1 0}
+#modeHint{margin:0 0 11px}

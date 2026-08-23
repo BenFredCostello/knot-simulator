@@ -55,6 +55,61 @@ export function createStage(canvas) {
   grid.material.opacity = 0.55;
   scene.add(grid);
 
+  // Floor and ceiling of the slab, shown only in peg mode so the hard bounds
+  // are visible rather than mysterious.
+  const makeBound = (opacity) => {
+    const g = new THREE.GridHelper(40, 40, 0x27354a, 0x18202e);
+    g.material.transparent = true;
+    g.material.opacity = opacity;
+    g.visible = false;
+    scene.add(g);
+    return g;
+  };
+  const slabFloor = makeBound(0.75);
+  const slabCeil = makeBound(0.25);
+
+  const pegMat = new THREE.MeshStandardMaterial({
+    color: 0x6d7a8d,
+    roughness: 0.42,
+    metalness: 0.65,
+    emissive: 0x0d1219,
+  });
+  const pegGroup = new THREE.Group();
+  scene.add(pegGroup);
+
+  /** Show `pegs` as upright rods spanning the slab, or hide them entirely. */
+  function setPegs(pegs, radius) {
+    while (pegGroup.children.length > pegs.length) {
+      const m = pegGroup.children.pop();
+      m.geometry.dispose();
+    }
+    while (pegGroup.children.length < pegs.length) {
+      pegGroup.add(new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 1, 14), pegMat));
+    }
+    pegs.forEach((p, i) => {
+      const mesh = pegGroup.children[i];
+      mesh.geometry.dispose();
+      mesh.geometry = new THREE.CylinderGeometry(radius, radius, p.yhi - p.ylo, 14);
+      mesh.position.set(p.x, (p.ylo + p.yhi) / 2, p.z);
+    });
+    const on = pegs.length > 0;
+    grid.visible = !on;
+    slabFloor.visible = on;
+    slabCeil.visible = on;
+    if (on) {
+      slabFloor.position.y = pegs[0].ylo;
+      slabCeil.position.y = pegs[0].yhi;
+    }
+  }
+
+  /** Track peg positions as they dilate outward. */
+  function updatePegs(pegs) {
+    pegs.forEach((p, i) => {
+      const mesh = pegGroup.children[i];
+      if (mesh) mesh.position.set(p.x, (p.ylo + p.yhi) / 2, p.z);
+    });
+  }
+
   // Camera fly-to state, tweened in the render loop.
   const tween = {
     active: false,
@@ -152,5 +207,9 @@ export function createStage(canvas) {
     return hits.length ? hits[0] : null;
   }
 
-  return { renderer, scene, camera, controls, resize, frame, follow, updateCamera, pick, grid };
+  return {
+    renderer, scene, camera, controls,
+    resize, frame, follow, updateCamera, pick,
+    grid, setPegs, updatePegs,
+  };
 }

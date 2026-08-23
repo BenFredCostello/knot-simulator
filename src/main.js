@@ -4,7 +4,7 @@
 
 import * as THREE from 'three';
 import { createStage, VIEW_DIRS } from './scene.js';
-import { buildRings } from './geometry.js';
+import { buildRings, buildPegs, CFG } from './geometry.js';
 import { Sim } from './physics.js';
 import { Tube } from './tube.js';
 import { parseWord, verifyBrunnian, wordToHTML, genLabel } from './word.js';
@@ -20,7 +20,18 @@ const SETTLE_FRAMES = 260;
 
 const $ = (id) => document.getElementById(id);
 
+const MODE_HINT = {
+  pegs:
+    'Each base ring is threaded on an upright peg between a hard floor and ceiling, ' +
+    'so it cannot wander or slip off. Pull dilates the pegs outward from the origin — ' +
+    'a peg at the centre stays put — and stops once the link is taut.',
+  free:
+    'No pegs, no bounds. Rings contract and drift apart under their own tension. ' +
+    'Looser and more organic, but components can travel a long way.',
+};
+
 const state = {
+  mode: 'pegs',
   ringCount: 3,
   wordText: "aba'b'",
   cutFrac: [],        // per ring (0-based): null, or where along the ring it is snipped
@@ -61,10 +72,30 @@ function disposeTubes() {
 }
 
 function rebuild({ refit = false } = {}) {
+  const pegged = state.mode === 'pegs';
   const { letters } = currentWord();
-  const spec = buildRings(state.ringCount, letters);
+  const spec = buildRings(state.ringCount, letters, pegged);
 
-  sim.setStrands(spec.map((r) => ({ points: r.points, closed: true })));
+  // A base ring on a peg has to keep a hole wide enough for the word ring to
+  // pass beside the peg, so it is pinned against Pull and floored against
+  // Equalise. Radius 0.8 leaves a comfortable annulus outside the peg.
+  const PEGGED_MIN = 2 * Math.PI * 0.8;
+
+  sim.setStrands(
+    spec.map((r) => ({
+      points: r.points,
+      closed: true,
+      shrink: pegged ? r.isWordRing : true,
+      minLen: pegged && !r.isWordRing ? PEGGED_MIN : 0,
+      // Hoops must not balloon past their peg spacing when equalising.
+      maxLen: r.isWordRing ? 0 : 2 * Math.PI * 1.25,
+    }))
+  );
+
+  const pegs = pegged ? buildPegs(state.ringCount) : [];
+  sim.setPegs(pegs, CFG.PEG_CLEAR);
+  sim.setSlab(pegged ? -CFG.SLAB : null, pegged ? CFG.SLAB : null);
+  stage.setPegs(pegs, CFG.PEG_R);
 
   // Re-apply any snips at roughly the same place along each ring.
   for (let i = 0; i < spec.length; i++) {
@@ -356,6 +387,13 @@ $('pullBtn').addEventListener('click', () => {
   $('pullBtn').classList.toggle('on', state.pulling);
 });
 
+$('equaliseBtn').addEventListener('click', () => {
+  sim.equalise();
+  const lens = sim.strands.map((_, i) => sim.strandLength(i));
+  const mean = lens.reduce((a, b) => a + b, 0) / Math.max(1, lens.length);
+  toast(`Equalising every ring toward ${mean.toFixed(1)} units.`, 'ok');
+});
+
 $('cutBtn').addEventListener('click', () => {
   state.cutMode = !state.cutMode;
   $('cutBtn').classList.toggle('danger-on', state.cutMode);
@@ -380,6 +418,20 @@ $('tension').addEventListener('input', (e) => {
 
 $('autoSettle').addEventListener('change', (e) => {
   state.autoSettle = e.target.checked;
+});
+
+document.querySelectorAll('.mode').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    if (state.mode === btn.dataset.mode) return;
+    state.mode = btn.dataset.mode;
+    document.querySelectorAll('.mode').forEach((b) => b.classList.toggle('on', b === btn));
+    $('modeHint').textContent = MODE_HINT[state.mode];
+    $('tensionLabel').textContent = state.mode === 'pegs' ? 'Spread speed' : 'Tension';
+    state.cutFrac = [];
+    state.pulling = false;
+    $('pullBtn').classList.remove('on');
+    rebuild({ refit: true });
+  });
 });
 
 document.querySelectorAll('.view').forEach((btn) => {
@@ -410,10 +462,13 @@ function updateHud() {
   const pulling = state.pulling || state.spaceHeld;
   const settling = state.settleFrames > 0 && !pulling;
   const cuts = sim.strands.filter((s) => !s.closed).length;
+  const taut = pulling && sim.pegs.length && !sim.pegsMoving;
   $('hud').innerHTML =
     `<b>${state.ringCount}</b> rings &middot; <b>${sim.count}</b> points` +
+    (sim.pegs.length ? ` &middot; ${sim.pegs.length} pegs` : '') +
     (cuts ? ` &middot; <b>${cuts}</b> snipped` : '') +
-    (pulling ? ' &middot; <b>pulling</b>' : settling ? ' &middot; settling' : '') +
+    (sim.equalising ? ' &middot; <b>equalising</b>' : '') +
+    (taut ? ' &middot; <b>taut</b>' : pulling ? ' &middot; <b>pulling</b>' : settling ? ' &middot; settling' : '') +
     (state.cutMode ? ' &middot; <b>cut tool armed</b>' : '');
   $('stats').textContent = `three.js r169 · ${sim.count} sim points`;
 }
@@ -441,8 +496,9 @@ function frameOnce() {
     if (rings[i].tube && sim.strands[i]) rings[i].tube.update(sim.view(i));
   }
 
+  if (sim.pegs.length) stage.updatePegs(sim.pegs);
   // A tightened link ends up far smaller than it started, so track it.
-  if (pull) stage.follow(sim.bounds());
+  if (pull || sim.equalising) stage.follow(sim.bounds());
   stage.updateCamera();
   stage.renderer.render(stage.scene, stage.camera);
   updateHud();
@@ -453,6 +509,8 @@ function frameOnce() {
 // ---------------------------------------------------------------------------
 
 document.querySelector('.view[data-view="three"]').classList.add('on');
+$('modeHint').textContent = MODE_HINT[state.mode];
+$('tensionLabel').textContent = state.mode === 'pegs' ? 'Spread speed' : 'Tension';
 $('wordInput').value = state.wordText;
 rebuild();
 stage.resize();

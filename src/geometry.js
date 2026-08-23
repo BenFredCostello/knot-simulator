@@ -32,6 +32,15 @@ export const CFG = {
   MIN_PTS: 24,
   MAX_PTS: 560,
   MAX_GAP: 0.45,    // waypoint densification, keeps the spline hugging corners
+  PEG_R: 0.1,       // radius of the peg standing through each base ring
+  PEG_CLEAR: 0.26,  // centre-line distance a strand must keep from a peg
+  SLAB: 1.95,       // floor at -SLAB, ceiling at +SLAB
+  HRET: 1.6,        // height of the word ring's return sweep in peg mode
+  LANE_PAD: 1.9,    // first lane sits this far outside the ring of pegs
+  LANE_STEP: 0.5,   // radial gap between consecutive lanes
+  // Sideways offsets used for crossings in peg mode. Every one clears
+  // PEG_CLEAR, alternates sides, and stays well inside the ring's rim.
+  PEG_OFFSETS: [0.42, 0.59, 0.76],
 };
 
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
@@ -44,6 +53,18 @@ export function baseCenterX(i, m) {
 /** Number of simulated points for a curve of the given arc length. */
 function pointCount(length) {
   return clamp(Math.round(length / CFG.SEG), CFG.MIN_PTS, CFG.MAX_PTS);
+}
+
+/**
+ * Evenly spaced samples of a closed curve.
+ *
+ * getSpacedPoints(n) returns n+1 points spanning t = 0..1 inclusive, and on a
+ * closed curve those endpoints are the same point. Keeping both would leave a
+ * zero-length segment in the simulation, so the duplicate is dropped.
+ */
+function sampleClosed(curve) {
+  const n = pointCount(curve.getLength());
+  return curve.getSpacedPoints(n).slice(0, n);
 }
 
 /** A base ring: a unit circle in the y = 0 plane. */
@@ -62,7 +83,7 @@ export function buildBaseRing(i, m) {
  * Spread repeated crossings of the same ring sideways so two excursions
  * through one disk never land on top of each other.
  */
-function crossingOffsets(letters) {
+function crossingOffsets(letters, pegged) {
   const counts = new Map();
   for (const l of letters) counts.set(l.gen, (counts.get(l.gen) || 0) + 1);
   const seen = new Map();
@@ -70,6 +91,12 @@ function crossingOffsets(letters) {
     const c = counts.get(l.gen);
     const p = seen.get(l.gen) || 0;
     seen.set(l.gen, p + 1);
+    if (pegged) {
+      // A peg occupies the centre of every base ring, so the word ring has to
+      // thread the annulus beside it rather than straight down the middle.
+      const tier = Math.min(CFG.PEG_OFFSETS.length - 1, Math.floor(p / 2));
+      return (p % 2 === 0 ? 1 : -1) * CFG.PEG_OFFSETS[tier];
+    }
     if (c === 1) return 0;
     const step = Math.min(0.42, 1.24 / (c - 1));
     return clamp((p - (c - 1) / 2) * step, -CFG.MAXOFF, CFG.MAXOFF);
@@ -109,12 +136,12 @@ function idleRing(m) {
  * Build the word ring.  `letters` is the parsed word; letters naming a ring
  * that does not exist are skipped (the UI warns about them separately).
  */
-export function buildWordRing(letters, m) {
+export function buildWordRing(letters, m, pegged = false) {
   const valid = letters.filter((l) => l.gen >= 1 && l.gen <= m);
   if (m <= 0 || valid.length === 0) return idleRing(m);
 
   const { H, ZM, ZS, DZ, R, XFAR_PAD } = CFG;
-  const off = crossingOffsets(valid);
+  const off = crossingOffsets(valid, pegged);
   const xs = valid.map((l, j) => baseCenterX(l.gen, m) + off[j]);
   const xFar = baseCenterX(m, m) + R + XFAR_PAD;
 
@@ -150,23 +177,190 @@ export function buildWordRing(letters, m) {
   P(xFar * 0.33 + xs[0] * 0.67, 0, ZS);
 
   const dense = densify(corners);
-  const curve = new THREE.CatmullRomCurve3(dense, true, 'centripetal', 0.5);
-  return curve.getSpacedPoints(pointCount(curve.getLength()));
+  return sampleClosed(new THREE.CatmullRomCurve3(dense, true, 'centripetal', 0.5));
 }
 
 /**
  * Full scene geometry for `ringCount` rings and a parsed word.
  * Returns one entry per ring, lowest index first.
  */
-export function buildRings(ringCount, letters) {
+export function buildRings(ringCount, letters, pegged = false) {
   if (ringCount <= 0) return [];
-  if (ringCount === 1) return [{ index: 1, isWordRing: true, points: idleRing(0) }];
+  if (ringCount === 1) {
+    return [{ index: 1, isWordRing: true, points: pegged ? idleRingRadial(1) : idleRing(0) }];
+  }
 
   const m = ringCount - 1;
   const out = [];
   for (let i = 1; i <= m; i++) {
-    out.push({ index: i, isWordRing: false, points: buildBaseRing(i, m) });
+    out.push({
+      index: i,
+      isWordRing: false,
+      points: pegged ? buildBaseRingRadial(i, m) : buildBaseRing(i, m),
+    });
   }
-  out.push({ index: ringCount, isWordRing: true, points: buildWordRing(letters, m) });
+  out.push({
+    index: ringCount,
+    isWordRing: true,
+    points: pegged ? buildWordRingRadial(letters, m) : buildWordRing(letters, m, false),
+  });
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Peg mode: a radial "flower" layout.
+//
+// The base rings sit evenly around a circle centred on the origin — three of
+// them make a triangle — so nothing sits at the centre and every peg has a
+// genuine outward direction to travel in. Dilating the pegs away from the
+// origin therefore separates every pair at once.
+// ---------------------------------------------------------------------------
+
+/** Distance from the origin to each peg, wide enough that base rings clear. */
+export function pegRadius(m) {
+  if (m <= 1) return 1.6;
+  return Math.max(1.6, 1.38 / Math.sin(Math.PI / m));
+}
+
+/** Angle of base ring `i` in the flower. Starts at the top so 3 reads as a triangle. */
+export function ringAngle(i, m) {
+  return (2 * Math.PI * (i - 1)) / m - Math.PI / 2;
+}
+
+function centerOf(i, m) {
+  const D = pegRadius(m);
+  const a = ringAngle(i, m);
+  return { x: D * Math.cos(a), z: D * Math.sin(a), a, D };
+}
+
+/** A point at polar (radius, angle) pushed `off` along the tangent, at height y. */
+function polar(radius, a, off, y) {
+  return new THREE.Vector3(
+    radius * Math.cos(a) - off * Math.sin(a),
+    y,
+    radius * Math.sin(a) + off * Math.cos(a)
+  );
+}
+
+export function buildBaseRingRadial(i, m) {
+  const c = centerOf(i, m);
+  const n = pointCount(2 * Math.PI * CFG.R);
+  const pts = [];
+  for (let k = 0; k < n; k++) {
+    const t = (2 * Math.PI * k) / n;
+    pts.push(new THREE.Vector3(c.x + CFG.R * Math.cos(t), 0, c.z + CFG.R * Math.sin(t)));
+  }
+  return pts;
+}
+
+function idleRingRadial(m) {
+  const D = pegRadius(Math.max(1, m));
+  const n = pointCount(2 * Math.PI * CFG.R);
+  const cx = D + 3;
+  const pts = [];
+  for (let k = 0; k < n; k++) {
+    const t = (2 * Math.PI * k) / n;
+    pts.push(new THREE.Vector3(cx + CFG.R * Math.cos(t), 0, CFG.R * Math.sin(t)));
+  }
+  return pts;
+}
+
+const wrapPi = (d) => {
+  while (d > Math.PI) d -= 2 * Math.PI;
+  while (d < -Math.PI) d += 2 * Math.PI;
+  return d;
+};
+
+/**
+ * The word ring for the flower layout.
+ *
+ * Each letter dives once through its ring's disk, offset sideways so it passes
+ * beside the peg rather than through it. Between letters the curve parks on a
+ * lane: a circle at y = 0 wide enough to clear every base ring, one lane per
+ * letter so the path never revisits itself. The loop closes with a sweep lifted
+ * above the plane, which is the only way back to the innermost lane without
+ * cutting across the others.
+ */
+export function buildWordRingRadial(letters, m) {
+  const valid = letters.filter((l) => l.gen >= 1 && l.gen <= m);
+  if (m <= 0 || valid.length === 0) return idleRingRadial(m);
+
+  const { H, HRET, LANE_PAD, LANE_STEP } = CFG;
+  const D = pegRadius(m);
+  const RM = D + 1.3; // staging radius, already outside every base ring
+  const RL0 = D + LANE_PAD;
+  const off = crossingOffsets(valid, true);
+  const ang = valid.map((l) => ringAngle(l.gen, m));
+
+  const corners = [];
+  const P = (r, a, o, y) => corners.push(polar(r, a, o, y));
+
+  for (let j = 0; j < valid.length; j++) {
+    const a = ang[j];
+    const o = off[j];
+    const rIn = RL0 + j * LANE_STEP;
+    const rOut = RL0 + (j + 1) * LANE_STEP;
+    const yA = valid[j].inv ? -H : H;
+    const yB = -yA;
+
+    P(rIn, a, o, 0);        // dock on this letter's lane
+    P(rIn, a, o, yA);       // lift clear of the plane
+    P(RM, a, o, yA);        // run inward, passing over the ring
+    P(D, a, o, yA);
+    P(D, a, o, yA * 0.4);
+    P(D, a, o, 0);          // *** the crossing: inside this disk, beside the peg
+    P(D, a, o, yB * 0.4);
+    P(D, a, o, yB);
+    P(RM, a, o, yB);        // back out on the far side of the plane
+    P(rOut, a, o, yB);
+    P(rOut, a, o, 0);       // dock on the next lane
+
+    if (j < valid.length - 1) {
+      const d = wrapPi(ang[j + 1] - a);
+      const steps = Math.max(1, Math.round(Math.abs(d) / 0.22));
+      for (let s = 1; s < steps; s++) {
+        const f = s / steps;
+        P(rOut, a + d * f, o + (off[j + 1] - o) * f, 0);
+      }
+    }
+  }
+
+  // Return sweep: lift above the plane, travel back over every lane, and drop
+  // in just short of the first dock so the descent never shares a line with it.
+  const last = valid.length - 1;
+  const rLast = RL0 + valid.length * LANE_STEP;
+  const aLand = ang[0] - 0.22;
+  const aLift = ang[last] + 0.22;
+  // Step off the final dock before lifting, otherwise the rise shares a line
+  // with the descent that just landed there and the curve pinches to nothing.
+  P(rLast, ang[last] + 0.11, off[last] * 0.5, 0);
+  P(rLast, aLift, 0, 0);
+  P(rLast, aLift, 0, HRET);
+  const d = wrapPi(aLand - aLift);
+  const steps = Math.max(4, Math.round(Math.abs(d) / 0.22) + 3);
+  for (let s = 1; s <= steps; s++) {
+    const f = s / steps;
+    P(rLast + (RL0 - rLast) * f, aLift + d * f, 0, HRET);
+  }
+  P(RL0, aLand, 0, 0);      // descend outside every disk
+  const d2 = wrapPi(ang[0] - aLand);
+  for (let s = 1; s <= 3; s++) {
+    const f = s / 4;
+    P(RL0, aLand + d2 * f, off[0] * f, 0);
+  }
+
+  const dense = densify(corners);
+  return sampleClosed(new THREE.CatmullRomCurve3(dense, true, 'centripetal', 0.5));
+}
+
+/** One peg per base ring, standing through its centre and spanning the slab. */
+export function buildPegs(ringCount) {
+  const m = ringCount - 1;
+  if (m <= 0) return [];
+  const pegs = [];
+  for (let i = 1; i <= m; i++) {
+    const c = centerOf(i, m);
+    pegs.push({ x: c.x, z: c.z, ylo: -CFG.SLAB, yhi: CFG.SLAB });
+  }
+  return pegs;
 }
