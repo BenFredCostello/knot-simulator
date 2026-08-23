@@ -347,7 +347,7 @@ function preset(ringCount, word) {
 }
 
 $('borromean').addEventListener('click', () => preset(3, "aba'b'"));
-$('whitehead').addEventListener('click', () => preset(4, "aba'b'cbab'a'c'"));
+$('preset4').addEventListener('click', () => preset(4, "aba'b'cbab'a'c'"));
 
 $('verifyBtn').addEventListener('click', runVerify);
 
