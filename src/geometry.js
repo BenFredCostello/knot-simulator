@@ -95,6 +95,7 @@ function crossingOffsets(letters, pegged) {
     if (pegged) {
       // A peg occupies the centre of every base ring, so the word ring has to
       // thread the annulus beside it rather than straight down the middle.
+      //
       const tier = Math.min(CFG.PEG_OFFSETS.length - 1, Math.floor(p / 2));
       return (p % 2 === 0 ? 1 : -1) * CFG.PEG_OFFSETS[tier];
     }

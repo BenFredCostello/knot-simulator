@@ -127,7 +127,22 @@ the system parks exactly at the threshold and never moves again, even after a sn
 the link. Easing peg speed to zero as the hoops approach their stretch limit lets a locked link
 stall while a freed one keeps sliding.
 
-**Known bug: tightening can break the link.** In a settled three-ring Borromean layout the word
+**Known bug: the peg-mode construction builds a clasp.** Take the raw geometry for `aba'b'`,
+before any physics runs, and relax just two of the three rings with the third never present.
+Red and green come apart cleanly (gap 4.24, both contracting to 3.14). Blue and green do not —
+they stay touching at 0.19 with green unable to contract below 23.34. They are hooked from the
+moment the geometry is built, which is why snipping red leaves something that cannot pull free.
+
+The word itself is right: `src/invariant.js` reads the class of the word ring back out of the
+geometry and gets `aba'b'` in the correct order. That is a *homotopy* invariant though, and
+homotopy is not isotopy — a Whitehead-style clasp has exactly the right crossing sequence and is
+still linked. So a correct word does not certify a correct link.
+
+Moving the crossing offsets to one side of the peg does not fix it; it moves the clasp from
+blue-green to red-green. Exactly one pair is hooked either way, and which one depends on the
+offsets, so the cause is in the finger-and-lane geometry rather than in the offsets themselves.
+
+**Earlier suspicion, now withdrawn: tightening breaks the link.** In a settled three-ring Borromean layout the word
 ring and ring 1 come out genuinely linked, while the other two pairs are correctly unlinked. So
 snipping ring 2 leaves a real clasp that cannot pull free, and snipping ring 1 appears to work
 only because it removes half of that clasp. This happens during Pull, before any cut, and the
