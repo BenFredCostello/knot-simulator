@@ -18,6 +18,11 @@ const TUBE_RADIUS = 0.085;
 const TUBE_RADIAL = 9;
 const SETTLE_FRAMES = 260;
 
+// Shown in the sidebar footer. Bumped on each deploy, purely so you can tell at
+// a glance whether the page you are looking at is the one that was just built —
+// browsers cache ES modules hard and a normal reload does not always shift them.
+const BUILD = 'b5';
+
 const $ = (id) => document.getElementById(id);
 
 const MODE_HINT = {
@@ -84,13 +89,17 @@ function rebuild({ refit = false } = {}) {
   // resists its contraction and it would shrink to a fat little donut with no
   // visible hole — it has separated, but it no longer reads as a ring.
   const WORD_MIN = 2 * Math.PI * 0.85;
+  // Free mode has no pegs, and rings shrinking away is part of the point there,
+  // but a ring still has to stay legible as a ring. Below about four tube radii
+  // the hole closes up and it just reads as a lump of tube.
+  const FREE_MIN = 2 * Math.PI * TUBE_RADIUS * 4;
 
   sim.setStrands(
     spec.map((r) => ({
       points: r.points,
       closed: true,
       shrink: pegged ? r.isWordRing : true,
-      minLen: pegged ? (r.isWordRing ? WORD_MIN : PEGGED_MIN) : 0,
+      minLen: pegged ? (r.isWordRing ? WORD_MIN : PEGGED_MIN) : FREE_MIN,
       // Hoops must not balloon past their peg spacing when equalising.
       maxLen: r.isWordRing ? 0 : 2 * Math.PI * 1.25,
     }))
@@ -474,7 +483,7 @@ function updateHud() {
     (sim.equalising ? ' &middot; <b>equalising</b>' : '') +
     (taut ? ' &middot; <b>taut</b>' : pulling ? ' &middot; <b>pulling</b>' : settling ? ' &middot; settling' : '') +
     (state.cutMode ? ' &middot; <b>cut tool armed</b>' : '');
-  $('stats').textContent = `three.js r169 · ${sim.count} sim points`;
+  $('stats').textContent = `build ${BUILD} · ${sim.pegs.length} pegs · ${sim.count} points`;
 }
 
 function loop() {
