@@ -28,7 +28,7 @@ const DEFAULTS = {
   strainLimit: 1.12, // peg speed eases to zero as the hoops reach this stretch
   shrinkStrainLimit: 1.03, // never shrink rest length far below reachable length
   minPoints: 20,
-  maxPoints: 620,
+  maxPoints: 750,
 };
 
 function hashCell(x, y, z) {
@@ -595,12 +595,27 @@ export class Sim {
    */
   equalise() {
     if (!this.strands.length) return;
-    // Median, not mean. The word ring can start out an order of magnitude
-    // longer than the hoops, and a mean dominated by that outlier would inflate
-    // every hoop to match it instead of reeling the long one in.
-    const lens = this.strands.map((_, i) => this.strandLength(i)).sort((a, b) => a - b);
-    const mid = lens.length >> 1;
-    const target = lens.length % 2 ? lens[mid] : (lens[mid - 1] + lens[mid]) / 2;
+    // Everything aims at one common length, so the short rings grow while the
+    // long one contracts and they meet in the middle.
+    //
+    // That common length is the mean, but clamped to the band every strand can
+    // actually reach. A raw comb's word ring is an order of magnitude longer
+    // than the hoops, and a bare mean dominated by that outlier would inflate
+    // the hoops to match it instead of reeling the long one in. Clamping to the
+    // widest length all of them are allowed picks the sensible meeting point.
+    let total = 0;
+    let lo = 0;
+    let hi = Infinity;
+    for (let i = 0; i < this.strands.length; i++) {
+      total += this.strandLength(i);
+      const min = this.minLen ? this.minLen[i] || 0 : 0;
+      const max = this.maxLen && this.maxLen[i] ? this.maxLen[i] : Infinity;
+      if (min > lo) lo = min;
+      if (max < hi) hi = max;
+    }
+    if (lo > hi) lo = hi;
+    const target = Math.min(hi, Math.max(lo, total / this.strands.length));
+
     for (let i = 0; i < this.strands.length; i++) {
       const s = this.strands[i];
       const min = this.minLen ? this.minLen[i] || 0 : 0;
@@ -643,7 +658,9 @@ export class Sim {
       s.eqStall = 0;
       done = false;
       // Bounded rate, so equalising is something you watch rather than a jump.
-      const step = ratio > 1 ? Math.min(ratio, 1.006) : Math.max(ratio, 0.994);
+      // Growing is the safe direction — it releases tension — so short rings are
+      // allowed to catch up faster than the long one is reeled in.
+      const step = ratio > 1 ? Math.min(ratio, 1.02) : Math.max(ratio, 0.99);
       for (let k = 0; k < s.rest.length; k++) s.rest[k] *= step;
     }
     if (done) {

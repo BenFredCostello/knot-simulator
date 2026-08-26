@@ -78,16 +78,19 @@ can travel a long way from where they started.
 The intended demo: type `aba'b'`, hit **Pull** and watch three rings lock into a tight knot.
 Then arm the **cut tool**, snip any one of them, and pull again.
 
+Equalise drives everything at one common length, so the short rings grow while the long one
+contracts and they meet in the middle. That length is the mean, clamped to the band every strand
+is actually allowed to reach — a raw comb's word ring is an order of magnitude longer than the
+hoops, and a bare mean dominated by that outlier would inflate the hoops to match it instead of
+reeling the long one in.
+
 Equalise stops when a strand is genuinely taut. The word ring often cannot reach the common
 length — it has to weave through everything, and there is a shortest length at which it can
 still do so — and chasing a target it can never hit would leave it permanently over-tensioned.
 On a loose layout it still equalises fully (word ring 107 → 6.3, matching the hoops); on an
 already-tight knot it gives up after about thirty frames.
 
-Equalise targets the **median** length, not the mean. The word ring can start out an order of
-magnitude longer than the hoops (a raw comb for four rings runs to ~258 units against their
-6.3), and a mean dominated by that outlier inflates every hoop to match instead of reeling the
-long one in. Hoops are also capped so they cannot balloon past their peg spacing.
+Hoops are capped so they cannot balloon past their peg spacing.
 
 ## How it works
 
@@ -137,10 +140,27 @@ typed word. Because Borromean rings have all-zero linking numbers, that case was
 separately — intact, the three stay locked together under outward pressure; snip one and all
 three separate.
 
-In peg mode a snip separates the freed ring decisively — Borromean goes from component centres
-0.6–2.0 apart to 8.8, and the four-ring link doubles its extent with the cut ring 5.5–7.5 clear.
-The remaining rings stay near their pegs, because that is exactly what pegs are for; if you want
-everything to drift completely free, do that part in Free mode.
+In peg mode a snip separates decisively for three rings: the word ring goes from touching both
+hoops (0.14, 0.37) to 7.6 clear of each.
+
+**Known limitation.** The four-ring `[[a,b],c]` does not fully come apart. Snipping stretches the
+assembly out — extent goes from 5.0 to 13.4 — but the word ring stays draped on the remaining
+hoops instead of dropping off. It is 23 units of slack rope that had to swallow 225 units of
+initial comb, and those coils lock against each other once the rope has thickness; a tangle that
+is topologically free is not necessarily one a damped solver can undo. Thinner rope was tried and
+made it worse: it let the link break while still intact. Free mode remains the better
+demonstration for the larger words.
+
+### Every ring gets a peg, including the word ring
+
+The word ring used to be the one component nothing dragged. The hoops were held by their pegs;
+it merely rested against them, so after a snip it would often sit in the tangle rather than come
+free. It now has a stump of its own — the flower has one slot per ring, and the word ring's path
+takes a single turn around its slot, captured exactly the way each hoop is captured.
+
+That turn runs beneath the plane, so it crosses no disk and leaves the word untouched. Verified
+across every test word: winding is 0 about each hoop's peg (so it can always escape them) and 1
+about its own stump. Borromean now goes from 0.14/0.37 while intact to **7.6/7.6** after a snip.
 
 ### Why a peg is not just an obstacle
 

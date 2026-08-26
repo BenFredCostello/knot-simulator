@@ -30,14 +30,15 @@ export const CFG = {
   MAXOFF: 0.62,     // max sideways offset of a crossing from a disk centre
   SEG: 0.13,        // target arc length between simulated points
   MIN_PTS: 24,
-  MAX_PTS: 560,
+  MAX_PTS: 700,
   MAX_GAP: 0.45,    // waypoint densification, keeps the spline hugging corners
   PEG_R: 0.1,       // radius of the peg standing through each base ring
   PEG_CLEAR: 0.26,  // centre-line distance a strand must keep from a peg
   SLAB: 1.95,       // floor at -SLAB, ceiling at +SLAB
   HRET: 1.6,        // height of the word ring's return sweep in peg mode
-  LANE_PAD: 1.9,    // first lane sits this far outside the ring of pegs
-  LANE_STEP: 0.5,   // radial gap between consecutive lanes
+  LANE_PAD: 1.3,    // first lane sits this far outside the ring of pegs
+  LANE_STEP: 0.32,  // radial gap between consecutive lanes
+  HOME_R: 0.85,     // radius of the word ring's collar around its own stump
   // Sideways offsets used for crossings in peg mode. Every one clears
   // PEG_CLEAR, alternates sides, and stays well inside the ring's rim.
   PEG_OFFSETS: [0.42, 0.59, 0.76],
@@ -196,13 +197,15 @@ export function buildRings(ringCount, letters, pegged = false) {
     out.push({
       index: i,
       isWordRing: false,
-      points: pegged ? buildBaseRingRadial(i, m) : buildBaseRing(i, m),
+      points: pegged ? buildBaseRingRadial(i, ringCount) : buildBaseRing(i, m),
     });
   }
   out.push({
     index: ringCount,
     isWordRing: true,
-    points: pegged ? buildWordRingRadial(letters, m) : buildWordRing(letters, m, false),
+    points: pegged
+      ? buildWordRingRadial(letters, m, ringCount)
+      : buildWordRing(letters, m, false),
   });
   return out;
 }
@@ -253,14 +256,14 @@ export function buildBaseRingRadial(i, m) {
   return pts;
 }
 
-function idleRingRadial(m) {
-  const D = pegRadius(Math.max(1, m));
+/** With no word to follow, the word ring simply sits on its own stump. */
+function idleRingRadial(slots) {
+  const c = centerOf(Math.max(1, slots), Math.max(1, slots));
   const n = pointCount(2 * Math.PI * CFG.R);
-  const cx = D + 3;
   const pts = [];
   for (let k = 0; k < n; k++) {
     const t = (2 * Math.PI * k) / n;
-    pts.push(new THREE.Vector3(cx + CFG.R * Math.cos(t), 0, CFG.R * Math.sin(t)));
+    pts.push(new THREE.Vector3(c.x + CFG.R * Math.cos(t), 0, c.z + CFG.R * Math.sin(t)));
   }
   return pts;
 }
@@ -281,16 +284,16 @@ const wrapPi = (d) => {
  * above the plane, which is the only way back to the innermost lane without
  * cutting across the others.
  */
-export function buildWordRingRadial(letters, m) {
+export function buildWordRingRadial(letters, m, slots = m + 1) {
   const valid = letters.filter((l) => l.gen >= 1 && l.gen <= m);
-  if (m <= 0 || valid.length === 0) return idleRingRadial(m);
+  if (m <= 0 || valid.length === 0) return idleRingRadial(slots);
 
-  const { H, HRET, LANE_PAD, LANE_STEP } = CFG;
-  const D = pegRadius(m);
+  const { H, HRET, LANE_PAD, LANE_STEP, HOME_R } = CFG;
+  const D = pegRadius(slots);
   const RM = D + 1.3; // staging radius, already outside every base ring
   const RL0 = D + LANE_PAD;
   const off = crossingOffsets(valid, true);
-  const ang = valid.map((l) => ringAngle(l.gen, m));
+  const ang = valid.map((l) => ringAngle(l.gen, slots));
 
   // Choose which way round to travel between letters so the net angular travel
   // stays near zero.
@@ -365,11 +368,50 @@ export function buildWordRingRadial(letters, m) {
     P(rLast + (RL0 - rLast) * f, aLift + d * f, 0, HRET);
   }
   P(RL0, aLand, 0, 0);      // descend outside every disk
-  const d2 = wrapPi(ang[0] - aLand);
-  for (let s = 1; s <= 3; s++) {
-    const f = s / 4;
-    P(RL0, aLand + d2 * f, off[0] * f, 0);
+
+  // Collar the word ring onto its own stump.
+  //
+  // Without this the word ring is the one component nothing drags: the hoops are
+  // held by their pegs, but the word ring merely rests against them, so after a
+  // snip it often stays sitting in the tangle instead of coming free. Slot
+  // `slots` carries a stump of its own, and one turn around it captures the word
+  // ring exactly the way each hoop is captured by its peg.
+  //
+  // The whole detour runs beneath the plane, so it crosses no disk and leaves
+  // the word untouched. The turn contributes winding 1 about the stump and none
+  // about any other peg, and the two arcs retrace each other so they cancel.
+  const aHome = ringAngle(slots, slots);
+  const rOut2 = RL0 + 0.45;
+  const aEnter = ang[0] - 0.4;
+  P(RL0, aEnter, 0, -HRET * 0.55);
+  P(RL0, aEnter, 0, -HRET);
+  const dIn = wrapPi(aHome - aEnter);
+  const stepsIn = Math.max(3, Math.round(Math.abs(dIn) / 0.22));
+  for (let s = 1; s <= stepsIn; s++) {
+    P(RL0, aEnter + dIn * (s / stepsIn), 0, -HRET);
   }
+  P(D + HOME_R, aHome, 0, -HRET);
+  // One full turn around the stump, ramped in height so the ends stay apart.
+  const turn = 22;
+  for (let s = 0; s <= turn; s++) {
+    const psi = aHome + (2 * Math.PI * s) / turn;
+    const y = -HRET - 0.16 + 0.32 * (s / turn);
+    corners.push(
+      new THREE.Vector3(
+        D * Math.cos(aHome) + HOME_R * Math.cos(psi),
+        y,
+        D * Math.sin(aHome) + HOME_R * Math.sin(psi)
+      )
+    );
+  }
+  P(rOut2, aHome, 0, -HRET + 0.16);
+  const dOut = wrapPi(ang[0] - aHome);
+  const stepsOut = Math.max(3, Math.round(Math.abs(dOut) / 0.22));
+  for (let s = 1; s <= stepsOut; s++) {
+    P(rOut2, aHome + dOut * (s / stepsOut), 0, -HRET + 0.16);
+  }
+  P(rOut2, ang[0], 0, -HRET * 0.55);
+  P(RL0, ang[0], off[0] * 0.5, -0.35);
 
   const dense = densify(corners);
   return sampleClosed(new THREE.CatmullRomCurve3(dense, true, 'centripetal', 0.5));
@@ -377,11 +419,12 @@ export function buildWordRingRadial(letters, m) {
 
 /** One peg per base ring, standing through its centre and spanning the slab. */
 export function buildPegs(ringCount) {
-  const m = ringCount - 1;
-  if (m <= 0) return [];
+  if (ringCount <= 0) return [];
   const pegs = [];
-  for (let i = 1; i <= m; i++) {
-    const c = centerOf(i, m);
+  // One slot per ring. Slots 1..n-1 carry the base rings; the last carries the
+  // word ring's own stump, so every ring has something to be dragged by.
+  for (let i = 1; i <= ringCount; i++) {
+    const c = centerOf(i, ringCount);
     pegs.push({ x: c.x, z: c.z, ylo: -CFG.SLAB, yhi: CFG.SLAB });
   }
   return pegs;
