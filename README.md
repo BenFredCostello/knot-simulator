@@ -160,6 +160,15 @@ lanes.
 Words with three or more occurrences of one generator are also still wrong, including the
 four-ring preset `aba'b'cbab'a'c'`.
 
+**Free mode has the same fault, and is not fixed.** It uses a different builder — the row
+layout in `buildWordRing` — which still dives through the disk and surfaces on a different lane.
+Measured on the raw geometry for `aba'b'`: pairs 0, 0 and **8**, so the word ring is Whitehead
+linked to one hoop before any physics runs, exactly as in peg mode before the lasso. Porting the
+lasso across was attempted and reverted: the row layout's lanes are straight lines rather than
+circles, the inter-letter connector needs more than the single midpoint used there, and the
+result measured worse than what it replaced (two clasped pairs instead of one, with the geometry
+self-overlapping at 0.004). It needs doing properly rather than by analogy.
+
 What fixed the geometry was rebuilding each letter as a lasso: a tail in from the lane, one turn
 around the ring's cord, and the tail back out alongside itself. Previously a letter dived through
 the disk and surfaced on a *different* lane, so a generator arrived from above and its inverse
