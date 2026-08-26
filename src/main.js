@@ -21,7 +21,7 @@ const SETTLE_FRAMES = 260;
 // Shown in the sidebar footer. Bumped on each deploy, purely so you can tell at
 // a glance whether the page you are looking at is the one that was just built —
 // browsers cache ES modules hard and a normal reload does not always shift them.
-const BUILD = 'b8';
+const BUILD = 'b9';
 
 const $ = (id) => document.getElementById(id);
 

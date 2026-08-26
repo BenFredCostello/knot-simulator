@@ -39,9 +39,12 @@ export const CFG = {
   LANE_PAD: 1.3,    // first lane sits this far outside the ring of pegs
   LANE_STEP: 0.32,  // radial gap between consecutive lanes
   HOME_R: 0.85,     // radius of the word ring's collar around its own stump
-  // Sideways offsets used for crossings in peg mode. Every one clears
-  // PEG_CLEAR, alternates sides, and stays well inside the ring's rim.
+  // Sideways offsets used for crossings by the row (Free mode) builder.
   PEG_OFFSETS: [0.42, 0.59, 0.76],
+  LASSO_R: 0.28,      // radius of the turn a letter takes around a ring's cord
+  LASSO_TAIL: 0.6,    // how far out the tail reaches before the turn
+  LASSO_GAP: 0.26,    // sideways gap between the outgoing and returning tail
+  LASSO_SPREAD: 0.9,  // rim spacing between repeated visits to one ring
 };
 
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
@@ -269,6 +272,24 @@ function idleRingRadial(slots) {
   return pts;
 }
 
+/**
+ * Where around each ring's rim a letter takes its turn. Repeated visits to one
+ * ring are spread apart so their turns do not overlap, and kept to the outward
+ * facing half so the tail always arrives from outside the flower.
+ */
+function rimAngles(letters) {
+  const counts = new Map();
+  for (const l of letters) counts.set(l.gen, (counts.get(l.gen) || 0) + 1);
+  const seen = new Map();
+  return letters.map((l) => {
+    const c = counts.get(l.gen);
+    const p = seen.get(l.gen) || 0;
+    seen.set(l.gen, p + 1);
+    const spread = Math.min(CFG.LASSO_SPREAD, 2.5 / Math.max(1, c - 1));
+    return (p - (c - 1) / 2) * spread;
+  });
+}
+
 const wrapPi = (d) => {
   while (d > Math.PI) d -= 2 * Math.PI;
   while (d < -Math.PI) d += 2 * Math.PI;
@@ -289,12 +310,11 @@ export function buildWordRingRadial(letters, m, slots = m + 1) {
   const valid = letters.filter((l) => l.gen >= 1 && l.gen <= m);
   if (m <= 0 || valid.length === 0) return idleRingRadial(slots);
 
-  const { H, HRET, LANE_PAD, LANE_STEP, HOME_R } = CFG;
+  const { HRET, LANE_PAD, LANE_STEP, HOME_R, LASSO_R, LASSO_TAIL, LASSO_GAP } = CFG;
   const D = pegRadius(slots);
-  const RM = D + 1.3; // staging radius, already outside every base ring
   const RL0 = D + LANE_PAD;
-  const off = crossingOffsets(valid, true);
   const ang = valid.map((l) => ringAngle(l.gen, slots));
+  const psi = rimAngles(valid);
 
   // Choose which way round to travel between letters so the net angular travel
   // stays near zero.
@@ -319,32 +339,76 @@ export function buildWordRingRadial(letters, m, slots = m + 1) {
   const corners = [];
   const P = (r, a, o, y) => corners.push(polar(r, a, o, y));
 
-  for (let j = 0; j < valid.length; j++) {
+  // Each letter is a lasso: a tail in from the lane, one turn around the ring's
+  // cord, and the tail back out alongside itself.
+  //
+  // The previous version dived through the disk and surfaced on a different
+  // lane, so a generator arrived from above and its inverse from below by a
+  // different route. Those two cannot cancel — they grab the ring from opposite
+  // sides, which is a clasp — and the word ring came out Whitehead-linked to one
+  // hoop (determinant 8) even though the word said it should slip free. A tail
+  // traversed out and back cancels exactly, leaving only the single turn.
+  const lasso = valid.map((l, j) => {
     const a = use[j];
-    const o = off[j];
-    const rIn = RL0 + j * LANE_STEP;
-    const rOut = RL0 + (j + 1) * LANE_STEP;
-    const yA = valid[j].inv ? -H : H;
-    const yB = -yA;
+    const ux = Math.cos(a);
+    const uz = Math.sin(a);
+    const Nx = Math.cos(psi[j]) * ux - Math.sin(psi[j]) * Math.sin(a);
+    const Nz = Math.cos(psi[j]) * uz + Math.sin(psi[j]) * Math.cos(a);
+    const qx = D * ux + Nx;
+    const qz = D * uz + Nz;
+    return {
+      qx, qz, Nx, Nz, Gx: -Nz, Gz: Nx,
+      ang: a + wrapPi(Math.atan2(qz, qx) - a),
+      laneR: RL0 + j * LANE_STEP,
+    };
+  });
 
-    P(rIn, a, o, 0);        // dock on this letter's lane
-    P(rIn, a, o, yA);       // lift clear of the plane
-    P(RM, a, o, yA);        // run inward, passing over the ring
-    P(D, a, o, yA);
-    P(D, a, o, yA * 0.4);
-    P(D, a, o, 0);          // *** the crossing: inside this disk, beside the peg
-    P(D, a, o, yB * 0.4);
-    P(D, a, o, yB);
-    P(RM, a, o, yB);        // back out on the far side of the plane
-    P(rOut, a, o, yB);
-    P(rOut, a, o, 0);       // dock on the next lane
+  const half = LASSO_GAP / 2;
+  const tailOut = LASSO_R + LASSO_TAIL;
+  for (const L of lasso) {
+    // Put the dock exactly on the lane circle, offset along the same direction
+    // the tails use so the pair stays parallel the whole way in.
+    const b = L.qx * L.Nx + L.qz * L.Nz;
+    const c = L.qx * L.qx + L.qz * L.qz - L.laneR * L.laneR;
+    L.dockR = -b + Math.sqrt(Math.max(0, b * b - c));
+    L.dock = (sg) => ({
+      x: L.qx + L.dockR * L.Nx + sg * half * L.Gx,
+      z: L.qz + L.dockR * L.Nz + sg * half * L.Gz,
+    });
+  }
+
+  for (let j = 0; j < valid.length; j++) {
+    const L = lasso[j];
+    const at = (rad, yy, gg) =>
+      corners.push(
+        new THREE.Vector3(L.qx + rad * L.Nx + gg * L.Gx, yy, L.qz + rad * L.Nz + gg * L.Gz)
+      );
+
+    at(L.dockR, 0, half);
+    at(tailOut, 0, half);
+    const dir = valid[j].inv ? -1 : 1;
+    const turns = 22;
+    for (let s = 0; s <= turns; s++) {
+      const t = s / turns;
+      const al = dir * 2 * Math.PI * t;
+      at(LASSO_R * Math.cos(al), LASSO_R * Math.sin(al), half - LASSO_GAP * t);
+    }
+    at(tailOut, 0, -half);
+    at(L.dockR, 0, -half);
 
     if (j < valid.length - 1) {
-      const d = use[j + 1] - a;
-      const steps = Math.max(1, Math.round(Math.abs(d) / 0.22));
+      const M = lasso[j + 1];
+      const from = L.dock(-1);
+      const to = M.dock(1);
+      const a0 = L.ang + wrapPi(Math.atan2(from.z, from.x) - L.ang);
+      const a1 = M.ang + wrapPi(Math.atan2(to.z, to.x) - M.ang);
+      const r0 = Math.hypot(from.x, from.z);
+      const r1 = Math.hypot(to.x, to.z);
+      const d = a1 - a0;
+      const steps = Math.max(2, Math.round(Math.abs(d) / 0.22) + 1);
       for (let s = 1; s < steps; s++) {
         const f = s / steps;
-        P(rOut, a + d * f, o + (off[j + 1] - o) * f, 0);
+        P(r0 + (r1 - r0) * f, a0 + d * f, 0, 0);
       }
     }
   }
@@ -355,11 +419,11 @@ export function buildWordRingRadial(letters, m, slots = m + 1) {
   const rLast = RL0 + valid.length * LANE_STEP;
   // Land just short of the first dock, and unwind exactly the angle the letters
   // travelled, so the closed loop encircles no peg.
-  const aLand = ang[0] - 0.22;
-  const aLift = use[last] + 0.22;
+  const aLand = lasso[0].ang - 0.22;
+  const aLift = lasso[last].ang + 0.22;
   // Step off the final dock before lifting, otherwise the rise shares a line
   // with the descent that just landed there and the curve pinches to nothing.
-  P(rLast, use[last] + 0.11, off[last] * 0.5, 0);
+  P(rLast, lasso[last].ang + 0.11, 0, 0);
   P(rLast, aLift, 0, 0);
   P(rLast, aLift, 0, HRET);
   const d = aLand - aLift;
@@ -383,7 +447,7 @@ export function buildWordRingRadial(letters, m, slots = m + 1) {
   // about any other peg, and the two arcs retrace each other so they cancel.
   const aHome = ringAngle(slots, slots);
   const rOut2 = RL0 + 0.45;
-  const aEnter = ang[0] - 0.4;
+  const aEnter = lasso[0].ang - 0.4;
   P(RL0, aEnter, 0, -HRET * 0.55);
   P(RL0, aEnter, 0, -HRET);
   const dIn = wrapPi(aHome - aEnter);
@@ -406,13 +470,13 @@ export function buildWordRingRadial(letters, m, slots = m + 1) {
     );
   }
   P(rOut2, aHome, 0, -HRET + 0.16);
-  const dOut = wrapPi(ang[0] - aHome);
+  const dOut = wrapPi(lasso[0].ang - aHome);
   const stepsOut = Math.max(3, Math.round(Math.abs(dOut) / 0.22));
   for (let s = 1; s <= stepsOut; s++) {
     P(rOut2, aHome + dOut * (s / stepsOut), 0, -HRET + 0.16);
   }
-  P(rOut2, ang[0], 0, -HRET * 0.55);
-  P(RL0, ang[0], off[0] * 0.5, -0.35);
+  P(rOut2, lasso[0].ang, 0, -HRET * 0.55);
+  P(RL0, lasso[0].ang, half, -0.35);
 
   const dense = densify(corners);
   return sampleClosed(new THREE.CatmullRomCurve3(dense, true, 'centripetal', 0.5));

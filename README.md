@@ -127,20 +127,44 @@ the system parks exactly at the threshold and never moves again, even after a sn
 the link. Easing peg speed to zero as the hoops approach their stretch limit lets a locked link
 stall while a freed one keeps sliding.
 
-**Known bug: the peg-mode construction builds a clasp.** Take the raw geometry for `aba'b'`,
-before any physics runs, and relax just two of the three rings with the third never present.
-Red and green come apart cleanly (gap 4.24, both contracting to 3.14). Blue and green do not —
-they stay touching at 0.19 with green unable to contract below 23.34. They are hooked from the
-moment the geometry is built, which is why snipping red leaves something that cannot pull free.
+### Checking the link is the link you asked for
 
-The word itself is right: `src/invariant.js` reads the class of the word ring back out of the
-geometry and gets `aba'b'` in the correct order. That is a *homotopy* invariant though, and
-homotopy is not isotopy — a Whitehead-style clasp has exactly the right crossing sequence and is
-still linked. So a correct word does not certify a correct link.
+`src/linkdet.js` computes the **determinant of the link** straight from the simulated geometry:
+project along a generic direction, read off the crossings, cut each component into arcs at its
+undercrossings, and take the Alexander matrix at t = -1. Deleting one row and one column and
+taking the absolute determinant gives it. At t = -1 the two under-arcs at a crossing enter with
+the same coefficient, so crossing signs drop out and only the over/under structure matters.
 
-Moving the crossing offsets to one side of the peg does not fix it; it moves the clasp from
-blue-green to red-green. Exactly one pair is hooked either way, and which one depends on the
-offsets, so the cause is in the finger-and-lane geometry rather than in the offsets themselves.
+Unlike the homotopy class it is an isotopy invariant, so it sees a Whitehead-style clasp; unlike
+dragging components apart it gives a definite answer at any scale. Validated against known
+values: unlink 0, Hopf 2, trefoil 3 — the last from a deliberately non-minimal five-crossing
+projection.
+
+It is the test that should have existed from the start. Every earlier attempt to decide "are
+these two rings actually linked" was a proxy, and each of them misled at least once. Reach for
+this one first.
+
+**Known bug: tightening still builds a clasp.** The *geometry* for `aba'b'` is now correct: every
+two-component sublink has determinant 0 and the whole link has determinant 16, which is exactly
+the Borromean rings. Tightening then breaks it — after 1600 frames of Pull one pair reads 8, the
+Whitehead link.
+
+The likely cause is measurable: the built geometry has strands only 0.033 apart where `repel` is
+0.2, so the solver starts already in violation and resolves it by pushing something through.
+Attempts to open that gap — moving the lanes further out, dropping the tail waypoint — each
+reintroduced a clasp in the raw geometry, on a different pair. The construction is
+parity-sensitive in a way that is not yet understood, and getting every word right probably
+needs the word ring built in a standard position and then embedded, rather than routed through
+lanes.
+
+Words with three or more occurrences of one generator are also still wrong, including the
+four-ring preset `aba'b'cbab'a'c'`.
+
+What fixed the geometry was rebuilding each letter as a lasso: a tail in from the lane, one turn
+around the ring's cord, and the tail back out alongside itself. Previously a letter dived through
+the disk and surfaced on a *different* lane, so a generator arrived from above and its inverse
+from below by a different route — those cannot cancel, they grab the ring from opposite sides,
+and that is a clasp. A tail traversed out and back cancels exactly.
 
 **Earlier suspicion, now withdrawn: tightening breaks the link.** In a settled three-ring Borromean layout the word
 ring and ring 1 come out genuinely linked, while the other two pairs are correctly unlinked. So
