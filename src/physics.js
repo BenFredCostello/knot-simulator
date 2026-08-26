@@ -405,7 +405,12 @@ export class Sim {
       // exactly the state that squeezes strands through each other.
       if (restSum > 1e-6 && len / restSum > this.params.shrinkStrainLimit) continue;
 
-      const floor = s.closed ? Math.PI * repel * 1.08 : repel * 1.5;
+      // Geometric floor: a loop of this thickness cannot be shorter than this.
+      // The per-strand minimum is usually the binding one though — a ring freed
+      // by a cut has nothing left to resist it, and would otherwise contract to
+      // a lump of tube with no readable hole in it.
+      const geo = s.closed ? Math.PI * repel * 1.08 : repel * 1.5;
+      const floor = Math.max(geo, this.minLen ? this.minLen[si] || 0 : 0);
       let sum = 0;
       for (let k = 0; k < s.rest.length; k++) sum += s.rest[k];
       if (sum * rate < floor) {

@@ -127,6 +127,12 @@ the system parks exactly at the threshold and never moves again, even after a sn
 the link. Easing peg speed to zero as the hoops approach their stretch limit lets a locked link
 stall while a freed one keeps sliding.
 
+**A freed ring needs a minimum size, not just a minimum shape.** Once a snip frees the word ring
+nothing resists its contraction, so it ran all the way down to length 1.65 — a loop of radius
+0.26 wrapped in a tube of radius 0.085. It had genuinely separated (7.2 clear of both hoops) but
+it read as a solid lump rather than a ring. Every ring now has a floor on its total length, so
+what you see after a cut is still recognisably a ring.
+
 **Rest lengths are renormalised when a strand is resampled.** Rest is re-measured from current
 positions, so a strand that happens to be stretched at that moment would adopt the stretched
 length as its new rest and ratchet upward every time.

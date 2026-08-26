@@ -80,13 +80,17 @@ function rebuild({ refit = false } = {}) {
   // pass beside the peg, so it is pinned against Pull and floored against
   // Equalise. Radius 0.8 leaves a comfortable annulus outside the peg.
   const PEGGED_MIN = 2 * Math.PI * 0.8;
+  // The word ring needs its own floor as well. Once a snip frees it, nothing
+  // resists its contraction and it would shrink to a fat little donut with no
+  // visible hole — it has separated, but it no longer reads as a ring.
+  const WORD_MIN = 2 * Math.PI * 0.85;
 
   sim.setStrands(
     spec.map((r) => ({
       points: r.points,
       closed: true,
       shrink: pegged ? r.isWordRing : true,
-      minLen: pegged && !r.isWordRing ? PEGGED_MIN : 0,
+      minLen: pegged ? (r.isWordRing ? WORD_MIN : PEGGED_MIN) : 0,
       // Hoops must not balloon past their peg spacing when equalising.
       maxLen: r.isWordRing ? 0 : 2 * Math.PI * 1.25,
     }))
