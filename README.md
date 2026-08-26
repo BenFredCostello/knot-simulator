@@ -127,6 +127,19 @@ the system parks exactly at the threshold and never moves again, even after a sn
 the link. Easing peg speed to zero as the hoops approach their stretch limit lets a locked link
 stall while a freed one keeps sliding.
 
+**Known bug: tightening can break the link.** In a settled three-ring Borromean layout the word
+ring and ring 1 come out genuinely linked, while the other two pairs are correctly unlinked. So
+snipping ring 2 leaves a real clasp that cannot pull free, and snipping ring 1 appears to work
+only because it removes half of that clasp. This happens during Pull, before any cut, and the
+raw geometry is fine — it reads back the typed word in the correct order.
+
+Two things make it hard to catch. Distance auditing does not see it: no two strands ever come
+within 0.167 of each other, so nothing is ever observed passing through anything. And testing
+whether two curves are linked by dragging them apart is only valid at a gentle rate — at a drag
+of 0.05 per frame a *known* linked pair (linking number 2) "separates" to 440, because the drag
+simply tears strands through each other. Anything above about 0.02 is measuring the solver's
+failure rate, not the topology.
+
 **A jam is not a link, and the difference is measurable.** A snipped link would sometimes settle
 with two rings still touching and simply stay there, which looks exactly like a failure to come
 apart. It is worth checking which it is rather than assuming: linking numbers stayed at 0, the
