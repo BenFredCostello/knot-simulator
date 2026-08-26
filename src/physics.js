@@ -332,7 +332,24 @@ export class Sim {
       }
       cent.push([x / n, y / n, z / n]);
     }
-    const strength = this.params.spread * Math.max(0.05, tension);
+    const base = this.params.spread * Math.max(0.05, tension);
+    // Per-pair escalation. If pulling has stopped achieving anything for one
+    // particular pair, pull that pair harder.
+    //
+    // Components that are topologically free can still sit wedged together: a
+    // snipped Borromean link settles with two rings touching and simply stays
+    // there, though a firmer tug separates them completely. This has to be
+    // judged pair by pair, not globally — one component flying away keeps the
+    // overall size changing and masks the pair that is actually stuck.
+    //
+    // It cannot manufacture a separation that should not happen: genuinely
+    // linked rings do not come apart however hard they are pulled, they just go
+    // taut. The displacement cap stops the stronger force carrying a strand
+    // through anything.
+    const kk = k * k;
+    if (!this.pairStall || this.pairStall.length !== kk) {
+      this.pairStall = new Float32Array(kk);
+    }
     const out = new Float32Array(k * 3);
     for (let i = 0; i < k; i++) {
       let ax = 0;
@@ -344,6 +361,15 @@ export class Sim {
         let dy = cent[i][1] - cent[j][1];
         let dz = cent[i][2] - cent[j][2];
         const d = Math.hypot(dx, dy, dz);
+
+        // Escalate on refusal to separate, not on sitting still: a jammed pair
+        // jitters enough to keep resetting a stillness test, but it stays in
+        // contact. The longer a pair has failed to come apart while Pull is
+        // held, the harder it gets pushed.
+        const idx = i * k + j;
+        this.pairStall[idx] = d <= this.params.spreadRange ? this.pairStall[idx] + 1 : 0;
+        const strength = base * (1 + Math.min(11, this.pairStall[idx] / 120));
+
         // Once two rings are clearly apart, stop pushing — otherwise freed
         // components accelerate off-screen instead of settling where you can
         // see that they came apart.
@@ -353,14 +379,16 @@ export class Sim {
           dy = 1e-3;
           dz = 0;
         }
-        const inv = 1 / Math.max(d, 0.5);
+        const inv = strength / Math.max(d, 0.5);
         ax += dx * inv * inv;
         ay += dy * inv * inv;
         az += dz * inv * inv;
       }
       const m = Math.hypot(ax, ay, az);
       if (m > 1e-9) {
-        const s = strength / m;
+        // Direction from the accumulated pulls, magnitude from the strongest
+        // pair acting on this ring.
+        const s = Math.min(m, base * 14) / m;
         out[i * 3] = ax * s;
         out[i * 3 + 1] = ay * s;
         out[i * 3 + 2] = az * s;
@@ -697,6 +725,15 @@ export class Sim {
       let dx = (pos[o] - prev[o]) * damping;
       let dy = (pos[o + 1] - prev[o + 1]) * damping;
       let dz = (pos[o + 2] - prev[o + 2]) * damping;
+      // The separation drift is folded in before the cap, not after. Added
+      // afterwards it would be unbounded, and escalating it (see _computeSpread)
+      // could then carry a strand clean through another between checks.
+      if (sp) {
+        const c = this.sid[i] * 3;
+        dx += sp[c];
+        dy += sp[c + 1];
+        dz += sp[c + 2];
+      }
       const mag = Math.hypot(dx, dy, dz);
       if (mag > maxDisp) {
         const k = maxDisp / mag;
@@ -710,12 +747,6 @@ export class Sim {
       pos[o] += dx;
       pos[o + 1] += dy;
       pos[o + 2] += dz;
-      if (sp) {
-        const c = this.sid[i] * 3;
-        pos[o] += sp[c];
-        pos[o + 1] += sp[c + 1];
-        pos[o + 2] += sp[c + 2];
-      }
     }
 
     this._buildHash();

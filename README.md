@@ -127,6 +127,19 @@ the system parks exactly at the threshold and never moves again, even after a sn
 the link. Easing peg speed to zero as the hoops approach their stretch limit lets a locked link
 stall while a freed one keeps sliding.
 
+**A jam is not a link, and the difference is measurable.** A snipped link would sometimes settle
+with two rings still touching and simply stay there, which looks exactly like a failure to come
+apart. It is worth checking which it is rather than assuming: linking numbers stayed at 0, the
+closest approach anywhere in the simulation stayed at or above `repel` — so nothing had passed
+through anything — and a firmer tug separated them to 5.0. They were never linked, merely wedged.
+
+So the separation drift now escalates: the longer a pair fails to come apart while Pull is held,
+the harder it is pushed, up to twelve times. Judging that pair by pair matters — one component
+flying away keeps the overall size changing and masks the pair that is actually stuck. This
+cannot invent a separation, and that was tested rather than assumed: an intact Borromean link
+held at 0.19–0.32 under the full escalation, because genuinely linked rings do not come apart
+however hard you pull, they just go taut.
+
 **A freed ring needs a minimum size, not just a minimum shape.** Once a snip frees the word ring
 nothing resists its contraction, so it ran all the way down to length 1.65 — a loop of radius
 0.26 wrapped in a tube of radius 0.085. It had genuinely separated (7.2 clear of both hoops) but
