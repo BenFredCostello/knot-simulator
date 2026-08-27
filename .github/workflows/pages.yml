@@ -2,7 +2,7 @@ name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: [main]
+    branches: [main, pre-stump]
   workflow_dispatch:
 
 permissions:
@@ -21,7 +21,17 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     steps:
+      # The site root is always main, whichever branch triggered the run.
       - uses: actions/checkout@v4
+        with:
+          ref: main
+      # The pre-stump snapshot rides along at /pre-stump/ as a second site.
+      - uses: actions/checkout@v4
+        with:
+          ref: pre-stump
+          path: pre-stump
+      - name: Drop the nested checkout metadata
+        run: rm -rf pre-stump/.git pre-stump/.github
       - uses: actions/configure-pages@v5
       # No build step: this is a plain static site using ES modules and an
       # import map, so the repository is uploaded exactly as it is.
